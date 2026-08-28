@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from app.core.config import get_settings
 from app.core.database import engine
 from app.voice.routes import router as voice_router
+from app.voice.websocket import router as websocket_router
 
 settings = get_settings()
 
@@ -23,6 +24,7 @@ app = FastAPI(
 )
 
 app.include_router(voice_router)
+app.include_router(websocket_router)
 
 @app.get("/health")
 async def health_check():
