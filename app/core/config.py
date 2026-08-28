@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     debug: bool = True
 
-    openai_api_key: str
+    sarvam_api_key: str
+    murf_api_key: str
+    murf_voice_id: str
 
     twilio_account_sid: str
     twilio_auth_token: str
