@@ -1,12 +1,14 @@
 import json
 
 from langgraph.graph import END, START, StateGraph
-
 from app.agent.decision import AgentDecision, NextAction
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.state import AgentState
 from app.voice.sarvam_llm import SarvamLLM
 from app.agent.analyze import analyze_signals
+from app.agent.classification_node import classify_customer_node
+from app.agent.action_node import determine_action_node
+from app.agent.action_execution_node import execute_business_action
 
 llm = SarvamLLM()
 
@@ -121,12 +123,39 @@ graph_builder.add_node("ask_question", ask_question)
 graph_builder.add_node("continue", continue_conversation)
 graph_builder.add_node("end_conversation", end_conversation)
 graph_builder.add_node("analyze_signals", analyze_signals)
+graph_builder.add_node(
+    "classify_customer",
+    classify_customer_node,
+)
+graph_builder.add_node(
+    "determine_action",
+    determine_action_node,
+)
+graph_builder.add_node(
+    "execute_business_action",
+    execute_business_action,
+)
+
+
 
 graph_builder.add_edge(START, "reason")
 graph_builder.add_edge("reason", "analyze_signals")
+graph_builder.add_edge(
+    "analyze_signals",
+    "classify_customer",
+)
+graph_builder.add_edge(
+    "classify_customer",
+    "determine_action",
+)
+graph_builder.add_edge(
+    "determine_action",
+    "execute_business_action",
+)
+
 
 graph_builder.add_conditional_edges(
-    "analyze_signals",
+    "execute_business_action",
     route_decision,
     {
         NextAction.ASK_QUESTION.value: "ask_question",
@@ -134,6 +163,7 @@ graph_builder.add_conditional_edges(
         NextAction.END_CONVERSATION.value: "end_conversation",
     },
 )
+
 
 graph_builder.add_edge("ask_question", END)
 graph_builder.add_edge("continue", END)
