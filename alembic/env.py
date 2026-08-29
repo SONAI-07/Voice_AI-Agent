@@ -23,6 +23,12 @@ if config.config_file_name is not None:
 # target_metadata = mymodel.Base.metadata
 
 from app.models.base import Base
+from app.models.base import Base
+from app.models.customer import Customer
+from app.models.call import Call
+from app.models.business_action import BusinessActionExecution
+from app.models.call_insights import CallInsight
+
 
 target_metadata = Base.metadata
 
