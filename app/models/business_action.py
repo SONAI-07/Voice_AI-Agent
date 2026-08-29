@@ -5,7 +5,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-
+#Database Table
 class BusinessActionExecution(Base):
     __tablename__ = "business_action_executions"
 

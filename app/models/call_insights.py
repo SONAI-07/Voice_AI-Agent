@@ -11,7 +11,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 
-
+#Database Table
 class CallInsight(Base):
     __tablename__ = "call_insights"
 

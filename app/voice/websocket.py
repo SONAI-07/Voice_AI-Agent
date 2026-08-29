@@ -1,13 +1,14 @@
 import asyncio
 import base64
-import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from app.services.call_memory import CallMemory
 from app.voice.engine import RealtimeVoiceEngine
 from app.voice.murf_tts import MurfTTS
 from app.voice.sarvam_llm import SarvamLLM
 from app.voice.sarvam_stt import SarvamSTT
+from app.services.post_call_services import PostCallService
 
 router = APIRouter()
 
@@ -16,22 +17,41 @@ router = APIRouter()
 async def media_stream(websocket: WebSocket):
     await websocket.accept()
 
+    memory = CallMemory()
+    post_call_service = PostCallService(memory)
+    call_sid: str | None = None
+
     engine = RealtimeVoiceEngine(
         stt=SarvamSTT(language_code="en-IN"),
         llm=SarvamLLM(),
         tts=MurfTTS(),
+        memory=memory,
     )
+
 
     await engine.start()
 
     async def receive_twilio_audio():
+        nonlocal call_sid
+
         try:
             while True:
                 message = await websocket.receive_json()
 
                 event = message.get("event")
 
-                if event == "media":
+                if event == "start":
+                  start_data = message.get("start", {})
+
+                  call_sid = start_data.get("callSid")
+
+                  if not call_sid:
+
+                    raise ValueError("Twilio start event missing callSid")
+
+                  engine.set_call_sid(call_sid)
+
+                elif event == "media":
                     payload = message["media"]["payload"]
 
                     audio = base64.b64decode(payload)
@@ -55,6 +75,13 @@ async def media_stream(websocket: WebSocket):
                 transcript = event.get("data", {}).get("transcript")
 
                 if transcript:
+                    if call_sid:
+                        await memory.append_message(
+                            call_sid=call_sid,
+                            role="user",
+                            content=transcript,
+                        )
+
                     engine.tts_task = asyncio.create_task(
                         engine.process_transcript(transcript)
                     )
@@ -79,3 +106,13 @@ async def media_stream(websocket: WebSocket):
 
     finally:
         await engine.close()
+
+    if call_sid:
+        try:
+            await post_call_service.finalize_call(
+                call_sid
+            )
+        except Exception:
+            # Do not delete Redis if post-call persistence fails.
+            # Redis TTL preserves the conversation for retry.
+            raise
