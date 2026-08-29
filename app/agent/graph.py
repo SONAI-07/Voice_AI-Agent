@@ -22,15 +22,10 @@ async def reason(state: AgentState) -> AgentState:
             "content": SYSTEM_PROMPT,
         },
         *conversation,
-        {
-            "role": "user",
-            "content": state["current_transcript"],
-        },
     ]
-
     response_parts: list[str] = []
 
-    async for chunk in SarvamLLM.generate_stream(messages):
+    async for chunk in llm.generate_stream(messages):
         try:
             data = json.loads(chunk)
         except json.JSONDecodeError:
