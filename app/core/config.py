@@ -16,6 +16,18 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_phone_number: str
 
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_username: str
+    smtp_password: str
+    smtp_sender: str
+
+    whatsapp_access_token: str
+    whatsapp_phone_number_id: str
+    whatsapp_api_version: str = "v23.0"
+    whatsapp_brochure_template_name: str
+    whatsapp_brochure_template_language: str = "en"
+
     database_url: str
     redis_url: str
     public_base_url: str
