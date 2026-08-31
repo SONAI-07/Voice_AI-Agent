@@ -17,6 +17,8 @@ Rules:
 - If the customer is uncertain, help clarify their needs rather than forcing a sale.
 - If the customer clearly does not want to continue, respect that.
 
+
+
 You must return ONLY valid JSON matching this structure:
 
 {

@@ -1,7 +1,10 @@
 from app.agent.action import BusinessAction
 from app.agent.state import AgentState
-from app.services.action_executor import BusinessActionExecutor
+from app.services.business_action_executor import BusinessActionExecutor
 from app.services.business_actions import BusinessActionService
+from app.services.action_execution_context import (
+    get_customer_for_call,
+)
 
 
 class MockBusinessActionService(BusinessActionService):
@@ -38,20 +41,37 @@ async def execute_business_action(
     action = state["action"]
 
     if action is None:
-        raise ValueError("Business action is missing from state")
+        raise ValueError(
+            "Business action is missing from state"
+        )
+
+    if action.action != BusinessAction.SEND_WHATSAPP_BROCHURE:
+        return {
+            **state,
+            "action_executed": False,
+        }
+
+    customer = await get_customer_for_call(
+        state["call_sid"]
+    )
+
+    if not customer.phone_number:
+        raise ValueError(
+            "Customer has no phone number"
+        )
 
     executor = BusinessActionExecutor(
-        service=MockBusinessActionService()
+        service=BusinessActionService()
     )
 
     await executor.execute(
         action,
-        customer_phone=None,
-        customer_email=None,
-        customer_id=state["call_sid"],
+        call_sid=state["call_sid"],
+        customer_phone=customer.phone_number,
     )
 
     return {
         **state,
         "action_executed": True,
+        "live_action_triggered": True,
     }
