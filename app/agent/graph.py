@@ -1,14 +1,15 @@
 import json
 
 from langgraph.graph import END, START, StateGraph
+
+from app.agent.analyze import analyze_signals
+from app.agent.classification_node import classify_customer_node
+from app.agent.action_node import determine_business_action
 from app.agent.decision import AgentDecision, NextAction
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.state import AgentState
 from app.voice.sarvam_llm import SarvamLLM
-from app.agent.analyze import analyze_signals
-from app.agent.classification_node import classify_customer_node
-from app.agent.action_node import determine_action_node
-from services.action_execution_node import execute_business_action
+from app.services.action_execution_node import execute_business_action
 
 llm = SarvamLLM()
 
@@ -17,12 +18,10 @@ async def reason(state: AgentState) -> AgentState:
     conversation = state["conversation"]
 
     messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT,
-        },
+        {"role": "system", "content": SYSTEM_PROMPT},
         *conversation,
     ]
+
     response_parts: list[str] = []
 
     async for chunk in llm.generate_stream(messages):
@@ -32,7 +31,6 @@ async def reason(state: AgentState) -> AgentState:
             continue
 
         choices = data.get("choices", [])
-
         if not choices:
             continue
 
@@ -113,10 +111,10 @@ async def end_conversation(state: AgentState) -> AgentState:
 
 graph_builder = StateGraph(AgentState)
 
+# Core reasoning
 graph_builder.add_node("reason", reason)
-graph_builder.add_node("ask_question", ask_question)
-graph_builder.add_node("continue", continue_conversation)
-graph_builder.add_node("end_conversation", end_conversation)
+
+# Signal pipeline
 graph_builder.add_node("analyze_signals", analyze_signals)
 graph_builder.add_node(
     "classify_customer",
@@ -124,15 +122,21 @@ graph_builder.add_node(
 )
 graph_builder.add_node(
     "determine_action",
-    determine_action_node,
+    determine_business_action,
 )
+
+# Live business-action gate
 graph_builder.add_node(
     "execute_business_action",
     execute_business_action,
 )
 
+# Conversation routing
+graph_builder.add_node("ask_question", ask_question)
+graph_builder.add_node("continue", continue_conversation)
+graph_builder.add_node("end_conversation", end_conversation)
 
-
+# Pipeline
 graph_builder.add_edge(START, "reason")
 graph_builder.add_edge("reason", "analyze_signals")
 graph_builder.add_edge(
@@ -148,7 +152,7 @@ graph_builder.add_edge(
     "execute_business_action",
 )
 
-
+# Continue the conversation after the live-action gate.
 graph_builder.add_conditional_edges(
     "execute_business_action",
     route_decision,
@@ -158,7 +162,6 @@ graph_builder.add_conditional_edges(
         NextAction.END_CONVERSATION.value: "end_conversation",
     },
 )
-
 
 graph_builder.add_edge("ask_question", END)
 graph_builder.add_edge("continue", END)

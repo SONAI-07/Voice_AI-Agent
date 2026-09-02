@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import time
 
 from fastapi import (
     APIRouter,
@@ -7,6 +8,16 @@ from fastapi import (
     WebSocketDisconnect,
 )
 
+from app.observability.metrics import (
+    CALL_DURATION_SECONDS,
+    CALLS_ACTIVE,
+    CALLS_TOTAL,
+    POST_CALL_ERRORS_TOTAL,
+    POST_CALL_LATENCY_SECONDS,
+    POST_CALL_TOTAL,
+    STT_EVENTS_TOTAL,
+    STT_ERRORS_TOTAL,
+)
 from app.services.call_memory import CallMemory
 from app.services.post_call_services import PostCallService
 from app.voice.engine import RealtimeVoiceEngine
@@ -25,9 +36,13 @@ async def media_stream(
 
     await websocket.accept()
 
-    # -------------------------------------------------------------
-    # Services
-    # -------------------------------------------------------------
+    call_started_at = time.perf_counter()
+
+    CALLS_TOTAL.labels(
+        environment="production"
+    ).inc()
+
+    CALLS_ACTIVE.inc()
 
     memory = CallMemory()
 
@@ -36,10 +51,6 @@ async def media_stream(
     )
 
     call_sid: str | None = None
-
-    # -------------------------------------------------------------
-    # Voice engine
-    # -------------------------------------------------------------
 
     engine = RealtimeVoiceEngine(
         stt=SarvamSTT(
@@ -51,10 +62,6 @@ async def media_stream(
     )
 
     await engine.start()
-
-    # -------------------------------------------------------------
-    # Twilio → STT
-    # -------------------------------------------------------------
 
     async def receive_twilio_audio():
 
@@ -72,9 +79,9 @@ async def media_stream(
                     "event"
                 )
 
-                # -------------------------------------------------
-                # START
-                # -------------------------------------------------
+                STT_EVENTS_TOTAL.labels(
+                    event_type=event or "unknown"
+                ).inc()
 
                 if event == "start":
 
@@ -98,10 +105,6 @@ async def media_stream(
                         call_sid
                     )
 
-                # -------------------------------------------------
-                # MEDIA
-                # -------------------------------------------------
-
                 elif event == "media":
 
                     payload = (
@@ -116,10 +119,6 @@ async def media_stream(
                         audio
                     )
 
-                # -------------------------------------------------
-                # STOP
-                # -------------------------------------------------
-
                 elif event == "stop":
 
                     break
@@ -128,31 +127,27 @@ async def media_stream(
 
             pass
 
-    # -------------------------------------------------------------
-    # STT → Agent
-    # -------------------------------------------------------------
+        except Exception as exc:
+
+            STT_ERRORS_TOTAL.labels(
+                error_type=type(exc).__name__
+            ).inc()
+
+            raise
 
     async def process_stt():
 
-        async for event in (
-                engine.receive_stt_events()
-        ):
+        async for event in (engine.receive_stt_events()):
 
-            event_type = event.get(
-                "type"
-            )
+            event_type = event.get("type", "unknown")
 
-            # -----------------------------------------------------
-            # CUSTOMER STARTED SPEAKING
-            # -----------------------------------------------------
+            STT_EVENTS_TOTAL.labels(
+                event_type=event_type
+            ).inc()
 
             if event_type == "speech_start":
 
                 await engine.interrupt()
-
-            # -----------------------------------------------------
-            # FINAL TRANSCRIPT
-            # -----------------------------------------------------
 
             elif event_type == "transcript":
 
@@ -168,27 +163,15 @@ async def media_stream(
                 if not call_sid:
                     continue
 
-                # -------------------------------------------------
-                # USER MESSAGE → REDIS
-                # -------------------------------------------------
-
                 await memory.append_message(
                     call_sid=call_sid,
                     role="user",
                     content=transcript,
                 )
 
-                # -------------------------------------------------
-                # Submit to sequential agent worker.
-                # -------------------------------------------------
-
                 await engine.submit_transcript(
                     transcript
                 )
-
-    # -------------------------------------------------------------
-    # TTS → Twilio
-    # -------------------------------------------------------------
 
     async def send_tts_audio():
 
@@ -209,10 +192,6 @@ async def media_stream(
                 }
             )
 
-    # -------------------------------------------------------------
-    # Create independent lifecycle tasks
-    # -------------------------------------------------------------
-
     receive_task = asyncio.create_task(
         receive_twilio_audio()
     )
@@ -225,14 +204,8 @@ async def media_stream(
         send_tts_audio()
     )
 
-    # -------------------------------------------------------------
-    # CALL LIFECYCLE
-    # -------------------------------------------------------------
-
     try:
 
-        # The Twilio receiver is the authoritative
-        # lifecycle controller.
         await receive_task
 
     except WebSocketDisconnect:
@@ -242,41 +215,29 @@ async def media_stream(
     finally:
 
         # =========================================================
-        # STEP 1
-        # Stop accepting STT events.
+        # STOP INPUT
         # =========================================================
 
         stt_task.cancel()
 
-        try:
-
-            await stt_task
-
-        except asyncio.CancelledError:
-
-            pass
+        await asyncio.gather(
+            stt_task,
+            return_exceptions=True,
+        )
 
         # =========================================================
-        # STEP 2
-        # Stop forwarding new TTS audio to Twilio.
+        # STOP OUTPUT
         # =========================================================
 
         tts_audio_task.cancel()
 
-        try:
-
-            await tts_audio_task
-
-        except asyncio.CancelledError:
-
-            pass
+        await asyncio.gather(
+            tts_audio_task,
+            return_exceptions=True,
+        )
 
         # =========================================================
-        # STEP 3
-        # Wait for ALL accepted agent turns.
-        #
-        # This is the exact location where the previously
-        # confusing wait_for_agent_tasks() belongs.
+        # WAIT FOR AGENT
         # =========================================================
 
         try:
@@ -288,25 +249,25 @@ async def media_stream(
 
         except asyncio.TimeoutError:
 
-            # A broken/hung LLM/TTS operation must not keep
-            # the call lifecycle open indefinitely.
             await engine.cancel_agent_tasks()
 
         # =========================================================
-        # STEP 4
-        # Close voice providers.
+        # CLOSE PROVIDERS
         # =========================================================
 
         await engine.close()
 
         # =========================================================
-        # STEP 5
-        # Durable post-call processing.
-        #
-        # Redis MUST NOT be deleted if this fails.
+        # POST CALL
         # =========================================================
 
         if call_sid:
+
+            POST_CALL_TOTAL.inc()
+
+            post_call_started_at = (
+                time.perf_counter()
+            )
 
             try:
 
@@ -314,12 +275,28 @@ async def media_stream(
                     call_sid
                 )
 
-            except Exception:
+            except Exception as exc:
 
-                # IMPORTANT:
-                #
-                # Do NOT call memory.delete() here.
-                #
-                # PostCallService controls Redis deletion and
-                # only does so after successful durable processing.
+                POST_CALL_ERRORS_TOTAL.labels(
+                    error_type=type(exc).__name__
+                ).inc()
+
                 raise
+
+            finally:
+
+                POST_CALL_LATENCY_SECONDS.observe(
+                    time.perf_counter()
+                    - post_call_started_at
+                )
+
+        # =========================================================
+        # CALL METRICS
+        # =========================================================
+
+        CALL_DURATION_SECONDS.observe(
+            time.perf_counter()
+            - call_started_at
+        )
+
+        CALLS_ACTIVE.dec()

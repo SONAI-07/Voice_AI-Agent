@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     langchain_tracing_v2: bool = False
     langchain_project: str = "CustomerCare_Agent"
 
+    langsmith_tracing: bool = False
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "customer-care-agent"
+    langsmith_endpoint: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

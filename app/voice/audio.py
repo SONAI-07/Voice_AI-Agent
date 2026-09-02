@@ -3,6 +3,7 @@ import struct
 
 _MULAW_BIAS = 0x84
 
+#Conversion of Audio files for different services
 
 def mulaw_to_pcm16(data: bytes) -> bytes:
     output = bytearray(len(data) * 2)

@@ -1,6 +1,17 @@
 import asyncio
+import time
 from typing import TypedDict
 
+from app.observability.metrics import (
+    AGENT_INTERRUPTS_TOTAL,
+    AGENT_QUEUE_DEPTH,
+    AGENT_TURN_ERRORS_TOTAL,
+    AGENT_TURN_LATENCY_SECONDS,
+    AGENT_TURNS_TOTAL,
+    TTS_ERRORS_TOTAL,
+    TTS_LATENCY_SECONDS,
+    TTS_REQUESTS_TOTAL,
+)
 from app.services.call_memory import CallMemory
 
 from .llm import LLMProvider
@@ -33,7 +44,7 @@ class RealtimeVoiceEngine:
         self.running = False
 
         # ---------------------------------------------------------
-        # Agent turn lifecycle
+        # Agent queue
         # ---------------------------------------------------------
 
         self._turn_queue: asyncio.Queue[
@@ -42,18 +53,15 @@ class RealtimeVoiceEngine:
 
         self._worker_task: asyncio.Task | None = None
 
-        # The currently executing LangGraph/agent turn.
+        # Current LangGraph / TTS task.
         self.tts_task: asyncio.Task | None = None
 
-        # Persistent state for the current call.
-        #
-        # This is what allows intent_history and
-        # live_action_triggered to survive between turns.
+        # Persistent state across turns.
         self._agent_state = None
 
-    # -------------------------------------------------------------
-    # Call lifecycle
-    # -------------------------------------------------------------
+    # =============================================================
+    # CALL LIFECYCLE
+    # =============================================================
 
     def set_call_sid(
             self,
@@ -74,28 +82,25 @@ class RealtimeVoiceEngine:
 
         self.running = True
 
-        # Start exactly ONE agent worker.
         self._worker_task = asyncio.create_task(
             self._agent_worker()
         )
 
-    # -------------------------------------------------------------
+    # =============================================================
     # STT
-    # -------------------------------------------------------------
+    # =============================================================
 
     async def receive_stt_events(self):
 
         async for event in self.stt.receive_events():
+
             yield event
 
-    # -------------------------------------------------------------
-    # Transcript submission
-    # -------------------------------------------------------------
+    # =============================================================
+    # SUBMIT TRANSCRIPT
+    # =============================================================
 
-    async def submit_transcript(
-            self,
-            transcript: str,
-    ) -> None:
+    async def submit_transcript(self,transcript: str,) -> None:
 
         if not self.call_sid:
             raise RuntimeError(
@@ -108,18 +113,10 @@ class RealtimeVoiceEngine:
         if not transcript:
             return
 
-        # IMPORTANT:
-        #
-        # The WebSocket has already written the user message
-        # into Redis.
-        #
-        # We capture the conversation NOW so that Turn A gets
-        # Turn A's snapshot and Turn B gets Turn B's snapshot.
-        #
-        # Without this, Turn A might execute after Turn B has
-        # already been written to Redis.
-        conversation = await self.memory.get_messages(
-            self.call_sid
+        conversation = (
+            await self.memory.get_messages(
+                self.call_sid
+            )
         )
 
         await self._turn_queue.put(
@@ -129,9 +126,13 @@ class RealtimeVoiceEngine:
             }
         )
 
-    # -------------------------------------------------------------
-    # Sequential agent worker
-    # -------------------------------------------------------------
+        AGENT_QUEUE_DEPTH.set(
+            self._turn_queue.qsize()
+        )
+
+    # =============================================================
+    # SEQUENTIAL AGENT WORKER
+    # =============================================================
 
     async def _agent_worker(self) -> None:
 
@@ -139,8 +140,14 @@ class RealtimeVoiceEngine:
 
             turn = await self._turn_queue.get()
 
+            AGENT_QUEUE_DEPTH.set(
+                self._turn_queue.qsize()
+            )
+
             if turn is None:
+
                 self._turn_queue.task_done()
+
                 break
 
             transcript = turn["transcript"]
@@ -156,22 +163,37 @@ class RealtimeVoiceEngine:
             self.tts_task = task
 
             try:
+
                 await task
 
             except asyncio.CancelledError:
 
-                # Interruption is an expected event in a
-                # real-time voice conversation.
+                # Customer interruption is expected in
+                # real-time voice interaction.
                 pass
+
+            except Exception as exc:
+
+                AGENT_TURN_ERRORS_TOTAL.labels(
+                    environment="production",
+                    error_type=type(exc).__name__,
+                ).inc()
+
+                raise
 
             finally:
 
                 self.tts_task = None
+
                 self._turn_queue.task_done()
 
-    # -------------------------------------------------------------
-    # Agent turn
-    # -------------------------------------------------------------
+                AGENT_QUEUE_DEPTH.set(
+                    self._turn_queue.qsize()
+                )
+
+    # =============================================================
+    # AGENT TURN
+    # =============================================================
 
     async def process_transcript(
             self,
@@ -188,126 +210,161 @@ class RealtimeVoiceEngine:
         if not transcript.strip():
             return
 
-        # Import lazily so the voice engine does not participate
-        # in application import cycles.
-        from app.agent.graph import graph
+        start_time = time.perf_counter()
 
-        # ---------------------------------------------------------
-        # Create persistent state for the FIRST turn.
-        # ---------------------------------------------------------
+        AGENT_TURNS_TOTAL.labels(
+            environment="production"
+        ).inc()
 
-        if self._agent_state is None:
+        try:
 
-            self._agent_state = {
-                "call_sid": self.call_sid,
-                "conversation": conversation,
-                "current_transcript": transcript,
-                "agent_response": "",
-
-                "decision": None,
-                "next_node": None,
-
-                "intent": None,
-                "emotion": None,
-                "classification": None,
-
-                "intent_history": [],
-
-                "explicit_positive_signal": False,
-                "sustained_high_intent": False,
-                "live_action_triggered": False,
-
-                "action": None,
-                "action_executed": False,
-            }
-
-        else:
+            from app.agent.graph import graph
 
             # -----------------------------------------------------
-            # Preserve cross-turn agent state.
-            #
-            # In particular:
-            #
-            # intent_history
-            # live_action_triggered
-            #
-            # must NOT reset on every turn.
+            # INITIAL STATE
             # -----------------------------------------------------
 
-            self._agent_state = {
-                **self._agent_state,
+            if self._agent_state is None:
 
-                "call_sid": self.call_sid,
+                self._agent_state = {
+                    "call_sid": self.call_sid,
+                    "conversation": conversation,
+                    "current_transcript": transcript,
+                    "agent_response": "",
 
-                "conversation": conversation,
-                "current_transcript": transcript,
+                    "decision": None,
+                    "next_node": None,
 
-                "agent_response": "",
+                    "intent": None,
+                    "emotion": None,
+                    "classification": None,
 
-                "decision": None,
-                "next_node": None,
+                    "intent_history": [],
 
-                "intent": None,
-                "emotion": None,
-                "classification": None,
+                    "explicit_positive_signal": False,
+                    "sustained_high_intent": False,
+                    "live_action_triggered": False,
 
-                "action": None,
-                "action_executed": False,
-            }
+                    "action": None,
+                    "action_executed": False,
+                }
 
-        # ---------------------------------------------------------
-        # Execute LangGraph.
-        # ---------------------------------------------------------
+            # -----------------------------------------------------
+            # SUBSEQUENT STATE
+            # -----------------------------------------------------
 
-        final_state = await graph.ainvoke(
-            self._agent_state
-        )
+            else:
 
-        # Persist state for the next turn.
-        self._agent_state = final_state
+                self._agent_state = {
+                    **self._agent_state,
 
-        assistant_response = (
-            final_state["agent_response"]
-        )
+                    "call_sid": self.call_sid,
 
-        if not assistant_response:
-            return
+                    "conversation": conversation,
+                    "current_transcript": transcript,
 
-        # ---------------------------------------------------------
-        # Persist assistant response.
-        # ---------------------------------------------------------
+                    "agent_response": "",
 
-        await self.memory.append_message(
-            call_sid=self.call_sid,
-            role="assistant",
-            content=assistant_response,
-        )
+                    "decision": None,
+                    "next_node": None,
 
-        # ---------------------------------------------------------
-        # Send response through TTS.
-        # ---------------------------------------------------------
+                    "intent": None,
+                    "emotion": None,
+                    "classification": None,
 
-        await self.tts.synthesize(
-            assistant_response
-        )
+                    "action": None,
+                    "action_executed": False,
+                }
 
-    # -------------------------------------------------------------
-    # Wait for all accepted agent work
-    # -------------------------------------------------------------
+            # -----------------------------------------------------
+            # LANGGRAPH
+            # -----------------------------------------------------
+
+            final_state = await graph.ainvoke(
+                self._agent_state
+            )
+
+            self._agent_state = final_state
+
+            assistant_response = (
+                final_state["agent_response"]
+            )
+
+            if not assistant_response:
+                return
+
+            # -----------------------------------------------------
+            # REDIS
+            # -----------------------------------------------------
+
+            await self.memory.append_message(
+                call_sid=self.call_sid,
+                role="assistant",
+                content=assistant_response,
+            )
+
+            # -----------------------------------------------------
+            # TTS
+            # -----------------------------------------------------
+
+            TTS_REQUESTS_TOTAL.inc()
+
+            tts_start = time.perf_counter()
+
+            try:
+
+                await self.tts.synthesize(
+                    assistant_response
+                )
+
+            except Exception as exc:
+
+                TTS_ERRORS_TOTAL.labels(
+                    error_type=type(exc).__name__,
+                ).inc()
+
+                raise
+
+            finally:
+
+                TTS_LATENCY_SECONDS.observe(
+                    time.perf_counter()
+                    - tts_start
+                )
+
+        except asyncio.CancelledError:
+
+            raise
+
+        except Exception as exc:
+
+            AGENT_TURN_ERRORS_TOTAL.labels(
+                environment="production",
+                error_type=type(exc).__name__,
+            ).inc()
+
+            raise
+
+        finally:
+
+            AGENT_TURN_LATENCY_SECONDS.observe(
+                time.perf_counter()
+                - start_time
+            )
+
+    # =============================================================
+    # WAIT FOR AGENT WORK
+    # =============================================================
 
     async def wait_for_agent_tasks(
             self,
     ) -> None:
 
-        # Wait until every submitted turn has called task_done().
-        #
-        # This includes queued turns and the currently executing
-        # turn.
         await self._turn_queue.join()
 
-    # -------------------------------------------------------------
-    # Interrupt current agent turn
-    # -------------------------------------------------------------
+    # =============================================================
+    # INTERRUPTION
+    # =============================================================
 
     async def interrupt(self) -> None:
 
@@ -318,25 +375,27 @@ class RealtimeVoiceEngine:
                 and not current_task.done()
         ):
 
+            AGENT_INTERRUPTS_TOTAL.inc()
+
             current_task.cancel()
 
             try:
+
                 await current_task
 
             except asyncio.CancelledError:
+
                 pass
 
         await self.tts.clear()
 
         self.tts_task = None
 
-    # -------------------------------------------------------------
-    # Cancel everything
-    # -------------------------------------------------------------
+    # =============================================================
+    # HARD CANCEL
+    # =============================================================
 
-    async def cancel_agent_tasks(
-            self,
-    ) -> None:
+    async def cancel_agent_tasks(self) -> None:
 
         current_task = self.tts_task
 
@@ -348,12 +407,13 @@ class RealtimeVoiceEngine:
             current_task.cancel()
 
             try:
+
                 await current_task
 
             except asyncio.CancelledError:
+
                 pass
 
-        # Stop the worker itself.
         if (
                 self._worker_task is not None
                 and not self._worker_task.done()
@@ -362,46 +422,38 @@ class RealtimeVoiceEngine:
             self._worker_task.cancel()
 
             try:
+
                 await self._worker_task
 
             except asyncio.CancelledError:
+
                 pass
 
         self.tts_task = None
         self._worker_task = None
 
-        # Clear any turns which could not be processed.
+        # Drain unprocessed queue items.
         while not self._turn_queue.empty():
 
             try:
+
                 self._turn_queue.get_nowait()
+
                 self._turn_queue.task_done()
 
             except asyncio.QueueEmpty:
+
                 break
 
-    # -------------------------------------------------------------
-    # Shutdown
-    # -------------------------------------------------------------
+        AGENT_QUEUE_DEPTH.set(0)
+
+    # =============================================================
+    # CLOSE
+    # =============================================================
 
     async def close(self) -> None:
 
         self.running = False
-
-        # The caller should normally call
-        # wait_for_agent_tasks() BEFORE close().
-        #
-        # This method is the final hard shutdown safeguard.
-
-        if self._worker_task is not None:
-
-            self._worker_task.cancel()
-
-            try:
-                await self._worker_task
-
-            except asyncio.CancelledError:
-                pass
 
         await self.tts.clear()
 
@@ -411,3 +463,5 @@ class RealtimeVoiceEngine:
         self.tts_task = None
         self._worker_task = None
         self._agent_state = None
+
+        AGENT_QUEUE_DEPTH.set(0)

@@ -15,4 +15,4 @@ class WhatsAppProvider(ABC):
         Returns:
             Provider message ID.
         """
-        raise NotImplementedError
+        raise NotImplementedError()
