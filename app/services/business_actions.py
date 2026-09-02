@@ -1,6 +1,6 @@
 from app.services.meta_whatsapp import MetaWhatsAppProvider
 from app.services.email_provider import EmailProvider
-from app.services.follow_up_provider import FollowUpProvider
+from app.services.follow_up_providers import FollowUpProvider
 
 
 class BusinessActionService:
