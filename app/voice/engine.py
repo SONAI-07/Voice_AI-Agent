@@ -100,7 +100,10 @@ class RealtimeVoiceEngine:
     # SUBMIT TRANSCRIPT
     # =============================================================
 
-    async def submit_transcript(self,transcript: str,) -> None:
+    async def submit_transcript(
+            self,
+            transcript: str,
+    ) -> None:
 
         if not self.call_sid:
             raise RuntimeError(
@@ -168,18 +171,20 @@ class RealtimeVoiceEngine:
 
             except asyncio.CancelledError:
 
-                # Customer interruption is expected in
-                # real-time voice interaction.
-                pass
-
-            except Exception as exc:
-
-                AGENT_TURN_ERRORS_TOTAL.labels(
-                    environment="production",
-                    error_type=type(exc).__name__,
-                ).inc()
-
+                # Cancellation is used by interruption and shutdown.
+                # Do not treat expected cancellation as an agent
+                # processing failure.
                 raise
+
+            except Exception:
+
+                # process_transcript() owns agent-turn error
+                # instrumentation. The worker must remain alive
+                # after a recoverable turn failure.
+                #
+                # The finally block below guarantees task_done(),
+                # allowing queue.join() to continue correctly.
+                pass
 
             finally:
 
@@ -212,8 +217,12 @@ class RealtimeVoiceEngine:
 
         start_time = time.perf_counter()
 
+        from app.core.config import get_settings
+
+        settings = get_settings()
+
         AGENT_TURNS_TOTAL.labels(
-            environment="production"
+            environment=settings.app_env
         ).inc()
 
         try:
@@ -260,6 +269,9 @@ class RealtimeVoiceEngine:
 
                     "call_sid": self.call_sid,
 
+                    # IMPORTANT:
+                    # Use the snapshot captured when this turn was
+                    # submitted. Do not reload conversation here.
                     "conversation": conversation,
                     "current_transcript": transcript,
 
@@ -339,7 +351,7 @@ class RealtimeVoiceEngine:
         except Exception as exc:
 
             AGENT_TURN_ERRORS_TOTAL.labels(
-                environment="production",
+                environment=settings.app_env,
                 error_type=type(exc).__name__,
             ).inc()
 
@@ -465,3 +477,4 @@ class RealtimeVoiceEngine:
         self._agent_state = None
 
         AGENT_QUEUE_DEPTH.set(0)
+
