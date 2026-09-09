@@ -1,7 +1,13 @@
+import time
 from uuid import NAMESPACE_URL, uuid5
 
 from app.agent.action import ActionDecision, BusinessAction
 from app.core.database import AsyncSessionLocal
+from app.observability.metrics import (
+    BUSINESS_ACTION_ERRORS_TOTAL,
+    BUSINESS_ACTION_LATENCY_SECONDS,
+    BUSINESS_ACTIONS_TOTAL,
+)
 from app.repositories.BusinessAction_repo import (
     BusinessActionRepository,
 )
@@ -32,111 +38,168 @@ class BusinessActionExecutor:
         if not call_sid:
             raise ValueError("call_sid is required")
 
-        async with AsyncSessionLocal() as session:
+        action_name = action.action.value
+        started_at = time.perf_counter()
 
-            call = await self.call_repository.get_by_twilio_sid(
-                session,
-                call_sid,
-            )
+        BUSINESS_ACTIONS_TOTAL.labels(
+            action=action_name
+        ).inc()
 
-            if call is None:
-                raise ValueError(
-                    f"Call not found: {call_sid}"
+        try:
+
+            # =====================================================
+            # LOAD CALL + IDEMPOTENCY CHECK
+            # =====================================================
+
+            async with AsyncSessionLocal() as session:
+
+                call = (
+                    await self.call_repository
+                    .get_by_twilio_sid(
+                        session,
+                        call_sid,
+                    )
                 )
 
-            existing = await self.action_repository.get(
-                session,
-                call.id,
-                action.action.value,
-            )
-
-            if existing is not None:
-
-                if existing.status == "executed":
-                    return
-
-                if existing.status == "pending":
-                    raise RuntimeError(
-                        f"Action already pending: "
-                        f"{action.action.value}"
+                if call is None:
+                    raise ValueError(
+                        f"Call not found: {call_sid}"
                     )
 
-            execution = await self.action_repository.create(
-                session,
-                call.id,
-                action.action.value,
+                existing = (
+                    await self.action_repository.get(
+                        session,
+                        call.id,
+                        action_name,
+                    )
+                )
+
+                if existing is not None:
+
+                    if existing.status == "executed":
+                        return
+
+                    if existing.status == "pending":
+                        raise RuntimeError(
+                            f"Action already pending: "
+                            f"{action_name}"
+                        )
+
+                execution = (
+                    await self.action_repository.create(
+                        session,
+                        call.id,
+                        action_name,
+                    )
+                )
+
+                await session.commit()
+
+            # =====================================================
+            # DETERMINISTIC IDEMPOTENCY KEY
+            # =====================================================
+
+            idempotency_key = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"customer-care:"
+                    f"{call.id}:"
+                    f"{action_name}",
+                )
             )
 
-            await session.commit()
+            # =====================================================
+            # EXECUTE BUSINESS ACTION
+            # =====================================================
 
-        idempotency_key = str(
-            uuid5(
-                NAMESPACE_URL,
-                f"customer-care:"
-                f"{call.id}:"
-                f"{action.action.value}",
-            )
-        )
+            if action.action == (
+                    BusinessAction.SEND_WHATSAPP_BROCHURE
+            ):
 
-        if action.action == BusinessAction.SEND_WHATSAPP_BROCHURE:
+                if not customer_phone:
+                    raise ValueError(
+                        "customer_phone is required"
+                    )
 
-            if not customer_phone:
+                await self.service.send_whatsapp_brochure(
+                    customer_phone=customer_phone,
+                    idempotency_key=idempotency_key,
+                )
+
+            elif action.action == (
+                    BusinessAction.SEND_EMAIL_BROCHURE
+            ):
+
+                if not customer_email:
+                    raise ValueError(
+                        "customer_email is required"
+                    )
+
+                await self.service.send_email_brochure(
+                    customer_email=customer_email,
+                    idempotency_key=idempotency_key,
+                )
+
+            elif action.action == (
+                    BusinessAction.SCHEDULE_FOLLOW_UP
+            ):
+
+                if customer_id is None:
+                    raise ValueError(
+                        "customer_id is required"
+                    )
+
+                await self.service.schedule_follow_up(
+                    customer_id=customer_id,
+                    call_id=call.id,
+                    idempotency_key=idempotency_key,
+                )
+
+            else:
                 raise ValueError(
-                    "customer_phone is required"
+                    f"Unsupported business action: "
+                    f"{action_name}"
                 )
 
-            await self.service.send_whatsapp_brochure(
-                customer_phone=customer_phone,
-                idempotency_key=idempotency_key,
-            )
+            # =====================================================
+            # MARK EXECUTED
+            # =====================================================
 
-        elif action.action == BusinessAction.SEND_EMAIL_BROCHURE:
+            async with AsyncSessionLocal() as session:
 
-            if not customer_email:
-                raise ValueError(
-                    "customer_email is required"
+                result = (
+                    await self.action_repository.get(
+                        session,
+                        call.id,
+                        action_name,
+                    )
                 )
 
-            await self.service.send_email_brochure(
-                customer_email=customer_email,
-                idempotency_key=idempotency_key,
-            )
+                if result is None:
+                    raise RuntimeError(
+                        "Business action execution disappeared"
+                    )
 
-        elif action.action == BusinessAction.SCHEDULE_FOLLOW_UP:
-
-            if customer_id is None:
-                raise ValueError(
-                    "customer_id is required"
+                await self.action_repository.mark_executed(
+                    session,
+                    result,
                 )
 
-            await self.service.schedule_follow_up(
-                customer_id=customer_id,
-                call_id=call.id,
-                idempotency_key=idempotency_key,
+                await session.commit()
+
+        except Exception as exc:
+
+            BUSINESS_ACTION_ERRORS_TOTAL.labels(
+                action=action_name,
+                error_type=type(exc).__name__,
+            ).inc()
+
+            raise
+
+        finally:
+
+            BUSINESS_ACTION_LATENCY_SECONDS.labels(
+                action=action_name
+            ).observe(
+                time.perf_counter() - started_at
             )
-
-        else:
-            raise ValueError(
-                f"Unsupported business action: "
-                f"{action.action.value}"
-            )
-
-        async with AsyncSessionLocal() as session:
-
-            result = await self.action_repository.get(
-                session,
-                call.id,
-                action.action.value,
-            )
-
-            if result is None:
-                raise RuntimeError(
-                    "Business action execution disappeared"
-                )
-
-            await self.action_repository.mark_executed(
-                session,
-                result,
-            )
-
-            await session.commit()
