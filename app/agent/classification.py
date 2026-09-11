@@ -1,8 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field
 from typing import TypedDict
-
-from app.agent.classification import ClassificationResult
 from app.agent.decision import AgentDecision
 from app.agent.signals import EmotionSignal, IntentSignal
 
@@ -28,17 +26,14 @@ class CustomerClassification(str, Enum):
 
 
 class ClassificationResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
+    model_config = ConfigDict(extra="forbid")
     classification: CustomerClassification
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
 
 
-def classify_customer(
-        intent: IntentSignal,
-        emotion: EmotionSignal,
-) -> ClassificationResult:
+def classify_customer(intent: IntentSignal, emotion: EmotionSignal)->ClassificationResult:
     """
     Deterministic business classification.
 

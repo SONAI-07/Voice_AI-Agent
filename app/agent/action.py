@@ -1,11 +1,12 @@
+from __future__ import annotations
+from typing import TYPE_CHECKING
 from enum import Enum
-
 from pydantic import BaseModel, ConfigDict
-
 from app.agent.classification import CustomerClassification
 from app.agent.live_policy import should_send_whatsapp_now
-from app.agent.state import AgentState
 
+if TYPE_CHECKING:
+    from app.agent.state import AgentState
 
 class BusinessAction(str, Enum):
     SEND_WHATSAPP_BROCHURE = "send_whatsapp_brochure"
@@ -17,14 +18,11 @@ class BusinessAction(str, Enum):
 
 class ActionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
     action: BusinessAction
     classification: CustomerClassification
 
 
-def determine_business_action(
-        state: AgentState,
-) -> ActionDecision:
+def determine_business_action(state: AgentState) -> ActionDecision:
 
     classification = state["classification"]
 
@@ -42,12 +40,11 @@ def determine_business_action(
     if should_send_whatsapp_now(state):
         return ActionDecision(
             action=BusinessAction.SEND_WHATSAPP_BROCHURE,
-            classification=classification.classification,
+            classification = classification.classification,
         )
 
-    # Every other business action is deferred until
-    # the call has disconnected.
+    # Every other business action is deferred until the call has disconnected.
     return ActionDecision(
         action=BusinessAction.CONTINUE_CONVERSATION,
-        classification=classification.classification,
+        classification = classification.classification,
     )

@@ -8,8 +8,7 @@ from app.models.follow_up import FollowUp
 
 class FollowUpProvider:
 
-    async def schedule(
-            self,
+    async def schedule(self,
             customer_id: int,
             call_id: int,
             idempotency_key: str,

@@ -10,9 +10,11 @@ from app.core.database import engine
 from app.core.redis import redis_client
 from app.voice.routes import router as voice_router
 from app.voice.websocket import router as websocket_router
+from app.core.config import configure_langsmith
 
 
 settings = get_settings()
+configure_langsmith(settings)
 
 
 @asynccontextmanager

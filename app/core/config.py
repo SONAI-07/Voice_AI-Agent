@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,3 +53,28 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def configure_langsmith(settings: Settings) -> None:
+    """
+    Configure LangChain/LangSmith tracing from application settings.
+
+    LangSmith is optional. If tracing is disabled or not usable
+    LangSmith API key is configured, this function does nothing.
+
+    Observability must never prevent the application from starting.
+    """
+
+    if not settings.langsmith_tracing:
+        return
+
+    if not settings.langsmith_api_key:
+        return
+
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGCHAIN_PROJECT"] = settings.langsmith_project
+
+    if settings.langsmith_endpoint:
+        os.environ["LANGCHAIN_ENDPOINT"] = settings.langsmith_endpoint
+
