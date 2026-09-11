@@ -1,5 +1,8 @@
-from app.agent.state import AgentState
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from app.agent.state import AgentState
 
 HIGH_INTENT_THRESHOLD = 0.75
 HIGH_INTEREST_THRESHOLD = 0.70
@@ -8,9 +11,7 @@ MIN_INTENT_CONFIDENCE = 0.60
 REQUIRED_CONSECUTIVE_TURNS = 3
 
 
-def has_sustained_high_intent(
-        state: AgentState,
-) -> bool:
+def has_sustained_high_intent(state: AgentState) -> bool:
 
     history = state.get("intent_history", [])
 
@@ -30,9 +31,7 @@ def has_sustained_high_intent(
     )
 
 
-def should_send_whatsapp_now(
-        state: AgentState,
-) -> bool:
+def should_send_whatsapp_now(state: AgentState) -> bool:
 
     if state.get("live_action_triggered", False):
         return False
@@ -42,5 +41,7 @@ def should_send_whatsapp_now(
             False,
     ):
         return False
+
+
 
     return has_sustained_high_intent(state)

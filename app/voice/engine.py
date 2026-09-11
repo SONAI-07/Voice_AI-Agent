@@ -293,7 +293,18 @@ class RealtimeVoiceEngine:
             # -----------------------------------------------------
 
             final_state = await graph.ainvoke(
-                self._agent_state
+                self._agent_state,
+                config={
+                    "run_name": "voice_agent_turn",
+                    "tags": [
+                        "voice-agent",
+                        "langgraph",
+                    ],
+                    "metadata": {
+                        "environment": settings.app_env,
+                        "component": "voice_agent",
+                    },
+                },
             )
 
             self._agent_state = final_state

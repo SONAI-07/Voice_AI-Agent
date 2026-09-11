@@ -1,9 +1,12 @@
-from typing import TypedDict
+from __future__ import annotations
+from typing import TYPE_CHECKING, TypedDict
 
-from app.agent.action import ActionDecision
 from app.agent.classification import ClassificationResult
 from app.agent.decision import AgentDecision
 from app.agent.signals import EmotionSignal, IntentSignal
+
+if TYPE_CHECKING:
+    from app.agent.action import ActionDecision
 
 
 class IntentSnapshot(TypedDict):

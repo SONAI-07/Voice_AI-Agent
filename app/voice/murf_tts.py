@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import time
+from collections.abc import AsyncGenerator
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -21,20 +22,14 @@ MURF_TTS_SEND_TIMEOUT_SECONDS = 5.0
 
 
 class MurfTTS(TTSProvider):
-
     def __init__(self) -> None:
-
         settings = get_settings()
 
         if not settings.murf_api_key:
-            raise ValueError(
-                "MURF_API_KEY is not configured"
-            )
+            raise ValueError("MURF_API_KEY is not configured")
 
         if not settings.murf_voice_id:
-            raise ValueError(
-                "MURF_VOICE_ID is not configured"
-            )
+            raise ValueError("MURF_VOICE_ID is not configured")
 
         self.api_key = settings.murf_api_key
         self.voice_id = settings.murf_voice_id
@@ -46,14 +41,7 @@ class MurfTTS(TTSProvider):
     # =============================================================
 
     async def connect(self) -> None:
-
-        url = (
-            "wss://in.api.murf.ai/v1/speech/stream-input"
-            "?model=falcon-2"
-            "&sample_rate=8000"
-            "&channel_type=MONO"
-            "&format=ULAW"
-        )
+        url = "wss://global.api.murf.ai/v1/speech/stream"
 
         PROVIDER_REQUESTS_TOTAL.labels(
             provider="murf_tts",
@@ -63,23 +51,18 @@ class MurfTTS(TTSProvider):
         started_at = time.perf_counter()
 
         try:
-
             self.websocket = await asyncio.wait_for(
                 websockets.connect(
                     url,
                     additional_headers={
-                        "api_key": self.api_key,
+                        "api-key": self.api_key,
                     },
-                    open_timeout=(
-                        MURF_TTS_CONNECT_TIMEOUT_SECONDS
-                    ),
+                    open_timeout=MURF_TTS_CONNECT_TIMEOUT_SECONDS,
                     close_timeout=5,
                     ping_interval=20,
                     ping_timeout=10,
                 ),
-                timeout=(
-                        MURF_TTS_CONNECT_TIMEOUT_SECONDS + 2
-                ),
+                timeout=MURF_TTS_CONNECT_TIMEOUT_SECONDS + 2,
             )
 
             await asyncio.wait_for(
@@ -104,7 +87,6 @@ class MurfTTS(TTSProvider):
             )
 
         except asyncio.TimeoutError:
-
             TIMEOUTS_TOTAL.labels(
                 provider="murf_tts",
                 operation="connect",
@@ -119,11 +101,9 @@ class MurfTTS(TTSProvider):
             raise
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as exc:
-
             PROVIDER_ERRORS_TOTAL.labels(
                 provider="murf_tts",
                 operation="connect",
@@ -136,15 +116,9 @@ class MurfTTS(TTSProvider):
     # SYNTHESIZE
     # =============================================================
 
-    async def synthesize(
-            self,
-            text: str,
-    ) -> None:
-
+    async def synthesize(self, text: str) -> None:
         if self.websocket is None:
-            raise RuntimeError(
-                "Murf TTS is not connected"
-            )
+            raise RuntimeError("Murf TTS is not connected")
 
         if not text.strip():
             return
@@ -157,7 +131,6 @@ class MurfTTS(TTSProvider):
         started_at = time.perf_counter()
 
         try:
-
             await asyncio.wait_for(
                 self.websocket.send(
                     json.dumps(
@@ -179,7 +152,6 @@ class MurfTTS(TTSProvider):
             )
 
         except asyncio.TimeoutError:
-
             TIMEOUTS_TOTAL.labels(
                 provider="murf_tts",
                 operation="synthesize",
@@ -194,11 +166,9 @@ class MurfTTS(TTSProvider):
             raise
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as exc:
-
             PROVIDER_ERRORS_TOTAL.labels(
                 provider="murf_tts",
                 operation="synthesize",
@@ -211,12 +181,9 @@ class MurfTTS(TTSProvider):
     # RECEIVE AUDIO
     # =============================================================
 
-    async def receive_audio(self):
-
+    async def receive_audio(self) -> AsyncGenerator[bytes, None]:
         if self.websocket is None:
-            raise RuntimeError(
-                "Murf TTS is not connected"
-            )
+            raise RuntimeError("Murf TTS is not connected")
 
         PROVIDER_REQUESTS_TOTAL.labels(
             provider="murf_tts",
@@ -226,44 +193,29 @@ class MurfTTS(TTSProvider):
         started_at = time.perf_counter()
 
         try:
-
             async for raw_message in self.websocket:
-
-                message = json.loads(
-                    raw_message
-                )
+                message = json.loads(raw_message)
 
                 if "audioOutput" in message:
-
-                    audio = (
-                        message["audioOutput"]
-                        .get("audio")
-                    )
+                    audio = message["audioOutput"].get("audio")
 
                     if audio:
-
-                        yield base64.b64decode(
-                            audio
-                        )
+                        yield base64.b64decode(audio)
 
                 elif "finalOutput" in message:
-
                     PROVIDER_LATENCY_SECONDS.labels(
                         provider="murf_tts",
                         operation="receive_audio",
                     ).observe(
-                        time.perf_counter()
-                        - started_at
+                        time.perf_counter() - started_at
                     )
 
                     break
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as exc:
-
             PROVIDER_ERRORS_TOTAL.labels(
                 provider="murf_tts",
                 operation="receive_audio",
@@ -277,7 +229,6 @@ class MurfTTS(TTSProvider):
     # =============================================================
 
     async def clear(self) -> None:
-
         if self.websocket is None:
             return
 
@@ -289,7 +240,6 @@ class MurfTTS(TTSProvider):
         started_at = time.perf_counter()
 
         try:
-
             await asyncio.wait_for(
                 self.websocket.send(
                     json.dumps(
@@ -309,7 +259,6 @@ class MurfTTS(TTSProvider):
             )
 
         except asyncio.TimeoutError:
-
             TIMEOUTS_TOTAL.labels(
                 provider="murf_tts",
                 operation="clear",
@@ -324,11 +273,9 @@ class MurfTTS(TTSProvider):
             raise
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as exc:
-
             PROVIDER_ERRORS_TOTAL.labels(
                 provider="murf_tts",
                 operation="clear",
@@ -342,7 +289,6 @@ class MurfTTS(TTSProvider):
     # =============================================================
 
     async def close(self) -> None:
-
         if self.websocket is None:
             return
 
@@ -357,7 +303,6 @@ class MurfTTS(TTSProvider):
         started_at = time.perf_counter()
 
         try:
-
             await websocket.close()
 
             PROVIDER_LATENCY_SECONDS.labels(
@@ -368,11 +313,9 @@ class MurfTTS(TTSProvider):
             )
 
         except asyncio.CancelledError:
-
             raise
 
         except Exception as exc:
-
             PROVIDER_ERRORS_TOTAL.labels(
                 provider="murf_tts",
                 operation="close",
@@ -380,4 +323,3 @@ class MurfTTS(TTSProvider):
             ).inc()
 
             raise
-
