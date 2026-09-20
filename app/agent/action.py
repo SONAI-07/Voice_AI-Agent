@@ -32,8 +32,8 @@ def determine_business_action(state: AgentState) -> ActionDecision:
         )
 
     # The ONLY action permitted during the live call.
-    #
-    # It requires:
+
+
     #   1. sustained high intent
     #   2. explicit positive buying signal
     #   3. WhatsApp has not already been triggered
