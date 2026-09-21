@@ -39,6 +39,7 @@ app = FastAPI(
 app.include_router(voice_router)
 app.include_router(websocket_router)
 app.include_router(auth_router)
+app.include_router(customer_router)
 
 # Prometheus metrics are deliberately mounted outside
 # the customer-call execution path.
