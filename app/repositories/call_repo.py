@@ -69,6 +69,27 @@ class CallRepository:
 
 
 
+    async def list_for_tenant(
+                self,
+                session: AsyncSession,
+                tenant_id: int,
+    ) -> list[Call]:
+        """
+          Tenant-scoped call listing for authenticated SaaS operations.
+
+            Only calls belonging to the supplied tenant are returned.
+          """
+        result = await session.execute(
+            select(Call)
+            .where(
+                Call.tenant_id == tenant_id,
+                )
+            .order_by(Call.id)
+        )
+        return list(result.scalars().all())
+
+
+
     async def get_customer(
             self,
             session: AsyncSession,
