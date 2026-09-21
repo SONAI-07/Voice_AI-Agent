@@ -10,8 +10,8 @@ from app.core.database import engine
 from app.core.redis import redis_client
 from app.voice.routes import router as voice_router
 from app.voice.websocket import router as websocket_router
-
-
+from app.Auth.routes import router as auth_router
+from app.routes.customer_route import router as customer_router
 
 settings = get_settings()
 configure_langsmith(settings)
@@ -38,7 +38,7 @@ app = FastAPI(
 
 app.include_router(voice_router)
 app.include_router(websocket_router)
-
+app.include_router(auth_router)
 
 # Prometheus metrics are deliberately mounted outside
 # the customer-call execution path.

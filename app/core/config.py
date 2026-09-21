@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     redis_url: str
     public_base_url: str
 
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 60
+
     langchain_api_key: str
     langchain_tracing_v2: bool = False
     langchain_project: str = "CustomerCare_Agent"
