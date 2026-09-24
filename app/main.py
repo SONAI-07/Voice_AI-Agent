@@ -14,6 +14,8 @@ from app.Auth.routes import router as auth_router
 from app.routes.customer_route import router as customer_router
 from app.routes.call_route import router as call_router
 from app.routes.call_insight_route import router as call_insight_router
+from app.routes.dashboard_route import router as dashboard_router
+
 
 settings = get_settings()
 configure_langsmith(settings)
@@ -44,6 +46,7 @@ app.include_router(auth_router)
 app.include_router(customer_router)
 app.include_router(call_router)
 app.include_router(call_insight_router)
+app.include_router(dashboard_router)
 
 
 # Prometheus metrics are deliberately mounted outside the customer-call execution path.
