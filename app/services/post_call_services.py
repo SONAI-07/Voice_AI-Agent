@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
+from app.models.usage_record import UsageRecord
 from sqlalchemy import select
 
 from app.agent.action import (
@@ -34,6 +36,8 @@ class PostCallService:
         self.action_executor = BusinessActionExecutor(
             service=BusinessActionService()
         )
+
+
 
     async def finalize_call(
             self,
@@ -103,6 +107,33 @@ class PostCallService:
 
                 call.status = "completed"
                 call.ended_at = datetime.now(timezone.utc)
+
+
+                if call.started_at is not None:
+                   duration_seconds = (
+                         call.ended_at - call.started_at
+                  ).total_seconds()
+
+                   existing_usage = await session.execute(
+                         select(UsageRecord).where(
+             UsageRecord.call_id == call.id,
+                         UsageRecord.usage_type == "CALL_DURATION",
+                        )
+                   )
+
+                   if existing_usage.scalar_one_or_none() is None:
+                     session.add(
+                        UsageRecord(
+                        tenant_id=call.tenant_id,
+                        call_id=call.id,
+                        usage_type="CALL_DURATION",
+                        quantity=Decimal(str(max(duration_seconds, 0))),
+                        unit="SECOND",
+                        provider_cost=None,
+                        customer_charge=None,
+                        currency="INR",
+                    )
+                  )
 
                 if insight is not None:
 
@@ -185,6 +216,8 @@ class PostCallService:
         # IMPORTANT:
         # Only successful durable processing reaches this point.
         await self.memory.delete(call_sid)
+
+
 
     async def _whatsapp_was_sent(
             self,

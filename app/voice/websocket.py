@@ -7,7 +7,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-
+from datetime import datetime, timezone
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.observability.metrics import (
@@ -101,10 +101,24 @@ async def media_stream(websocket: WebSocket):
                             raise ValueError(
                                 "Unknown Twilio call SID"
                             )
+                        call.started_at = datetime.now(timezone.utc)
+                        await session.commit()
 
                         # The provider call SID has now been resolved
                         # to an authoritative durable Call record.
+                        # The provider call SID has now been resolved
+                        # to an authoritative durable Call record.
                         call_validated = True
+
+                        # Mark the actual beginning of the voice runtime.
+                        # The Call record was already created by the control plane,
+                        # so this timestamp represents when the provider actually
+                        # entered the voice execution lifecycle.
+                        async with AsyncSessionLocal() as session:
+                            async with session.begin():
+                             call.started_at = datetime.now(timezone.utc)
+
+
 
                         # =================================================
                         # START VOICE RUNTIME ONLY AFTER CALL VALIDATION
