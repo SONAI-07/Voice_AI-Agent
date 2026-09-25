@@ -106,20 +106,27 @@ class PostCallService:
                     )
 
                 call.status = "completed"
-                call.ended_at = datetime.now(timezone.utc)
+
+                if call.ended_at is None:
+                   call.ended_at = datetime.now(timezone.utc)
+
+
 
 
                 if call.started_at is not None:
-                   duration_seconds = (
-                         call.ended_at - call.started_at
-                  ).total_seconds()
+                   duration_seconds = max(
+                      (call.ended_at - call.started_at).total_seconds(),
+                       0,
+                   )
 
                    existing_usage = await session.execute(
-                         select(UsageRecord).where(
-             UsageRecord.call_id == call.id,
-                         UsageRecord.usage_type == "CALL_DURATION",
-                        )
+                       select(UsageRecord).where(
+                           UsageRecord.call_id == call.id,
+                           UsageRecord.usage_type == "CALL_DURATION",
+                           )
                    )
+
+
 
                    if existing_usage.scalar_one_or_none() is None:
                      session.add(
