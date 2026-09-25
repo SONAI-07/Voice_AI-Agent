@@ -29,6 +29,7 @@ from app.models.business_action import BusinessActionExecution
 from app.models.call_insights import CallInsight
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.usage_record import UsageRecord
 
 
 target_metadata = Base.metadata
