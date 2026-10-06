@@ -32,12 +32,14 @@ class RealtimeVoiceEngine:
             llm: LLMProvider,
             tts: TTSProvider,
             memory: CallMemory,
+            system_prompt: str,
     ) -> None:
 
         self.stt = stt
         self.llm = llm
         self.tts = tts
         self.memory = memory
+        self.system_prompt = system_prompt
 
         self.call_sid: str | None = None
 
@@ -240,6 +242,8 @@ class RealtimeVoiceEngine:
                     "conversation": conversation,
                     "current_transcript": transcript,
                     "agent_response": "",
+
+                    "system_prompt": self.system_prompt,
 
                     "decision": None,
                     "next_node": None,

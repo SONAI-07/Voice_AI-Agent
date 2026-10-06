@@ -17,8 +17,12 @@ llm = SarvamLLM()
 async def reason(state: AgentState) -> AgentState:
     conversation = state["conversation"]
 
+
+    system_prompt = state.get("system_prompt", SYSTEM_PROMPT)
+
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role":"system", "content": system_prompt},
         *conversation,
     ]
 

@@ -21,6 +21,7 @@ from app.observability.metrics import (
     STT_ERRORS_TOTAL,
 )
 from app.repositories.call_repo import CallRepository
+from app.repositories.agent_repo import AgentRepository
 from app.services.call_memory import CallMemory
 from app.services.post_call_services import PostCallService
 from app.voice.engine import RealtimeVoiceEngine
@@ -90,6 +91,7 @@ async def media_stream(websocket: WebSocket):
                         # DURABLE CALL OWNERSHIP RECOVERY
                         # =================================================
                         call_repository = CallRepository()
+                        agent_repository = AgentRepository()
 
                         async with AsyncSessionLocal() as session:
                             call = await call_repository.get_by_twilio_sid(
@@ -97,10 +99,24 @@ async def media_stream(websocket: WebSocket):
                                 twilio_call_sid=call_sid,
                             )
 
-                        if call is None:
-                            raise ValueError(
+                            if call is None:
+                                raise ValueError(
                                 "Unknown Twilio call SID"
                             )
+                            if call.agent_id is None:
+                                 raise ValueError("Call is missing agent ownership")
+
+                            agent = await agent_repository.get_by_id_for_tenant(
+                                session=session,
+                                agent_id=call.agent_id,
+                                tenant_id=call.tenant_id,
+                            )
+
+                            if agent is None:
+                                 raise ValueError("Call agent configuration could not be resolved")
+
+
+
                         call.started_at = datetime.now(timezone.utc)
                         await session.commit()
 
@@ -124,10 +140,15 @@ async def media_stream(websocket: WebSocket):
                         # START VOICE RUNTIME ONLY AFTER CALL VALIDATION
                         # =================================================
                         engine = RealtimeVoiceEngine(
-                            stt=SarvamSTT(language_code="en-IN"),
+                            stt=SarvamSTT(
+                                language_code=agent.language_code,
+                            ),
                             llm=SarvamLLM(),
-                            tts=MurfTTS(),
+                            tts=MurfTTS(
+                                voice_id=agent.voice_id,
+                            ),
                             memory=memory,
+                            system_prompt=agent.system_prompt,
                         )
 
                         await engine.start()
