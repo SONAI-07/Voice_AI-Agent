@@ -16,6 +16,8 @@ from app.schemas.call_schema import (
     OutboundCallResponse,
 )
 from app.voice.twillio import create_outbound_call
+from app.repositories.agent_repo import AgentRepository
+from app.repositories.campaign_repo import CampaignRepository
 
 
 router = APIRouter(
@@ -25,6 +27,8 @@ router = APIRouter(
 
 call_repository = CallRepository()
 customer_repository = CustomerRepository()
+agent_repository = AgentRepository()
+campaign_repository = CampaignRepository()
 settings = get_settings()
 
 
@@ -68,12 +72,52 @@ async def create_outbound_call_for_tenant(
             detail="Customer not found",
         )
 
+
+    agent = await agent_repository.get_by_id_for_tenant(
+            session=db,
+            agent_id=payload.agent_id,
+            tenant_id=tenant.id,
+        )
+
+    if agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent not found",
+        )
+
+
+    campaign = None
+
+    if payload.campaign_id is not None:
+        campaign = await campaign_repository.get_by_id_for_tenant(
+            session=db,
+            campaign_id=payload.campaign_id,
+            tenant_id=tenant.id,
+        )
+
+        if campaign is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Campaign not found",
+            )
+
+        if campaign.agent_id != agent.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Campaign does not belong to selected agent",
+            )
+
+
+
     # Establish durable ownership before contacting Twilio.
     call_record = Call(
         tenant_id=tenant.id,
         customer_id=customer.id,
+        agent_id=agent.id,
+        campaign_id=campaign.id if campaign else None,
         status="initiating",
     )
+
 
     db.add(call_record)
     await db.commit()

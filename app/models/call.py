@@ -26,6 +26,18 @@ class Call(Base):
         index=True,
     )
 
+    agent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agents.id"),
+        index=True,
+        nullable=True,
+    )
+
+    campaign_id: Mapped[int | None] = mapped_column(
+        ForeignKey("campaigns.id"),
+        index=True,
+        nullable=True,
+    )
+
     twilio_call_sid: Mapped[str | None] = mapped_column(
         String(100),
         unique=True,
